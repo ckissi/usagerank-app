@@ -80,8 +80,11 @@ fi
 if [[ $native == 1 ]]; then
   target_args=()
   bundle_dir=src-tauri/target/release/bundle
-  case "$(uname -m)" in arm64) platforms=(darwin-aarch64) ;; *) platforms=(darwin-x86_64) ;; esac
-  arch_label=$(uname -m)
+  # arch_label matches the .dmg name Tauri picks (UsageRank_<version>_aarch64.dmg / _x64.dmg).
+  case "$(uname -m)" in
+    arm64) platforms=(darwin-aarch64) arch_label=aarch64 ;;
+    *) platforms=(darwin-x86_64) arch_label=x64 ;;
+  esac
 else
   for t in aarch64-apple-darwin x86_64-apple-darwin; do
     rustup target list --installed | grep -qx "$t" || rustup target add "$t"

@@ -65,6 +65,13 @@ const snapshot = {
   settings: { display: 'tokens', intervalMinutes: 30, claude: true, codex: true }, autostart: true, retentionDays: 30,
   login: mode === 'login' ? { userCode: 'BCDF-GHJK', url: 'https://usagerank.com/cli/authorize?code=BCDF-GHJK', expiresAt: Date.now() + 540000 } : null,
   loginError: null, sources: [{ key: 'claude', label: 'Claude Code', dirs: ['/Users/mira/.claude/projects'] }, { key: 'codex', label: 'Codex', dirs: ['/Users/mira/.codex/sessions'] }], version: '0.1.0',
+  // &update=available|installing|failed|current
+  update: {
+    available: { version: '0.2.0', notes: 'Faster scans and a new Limits layout.' },
+    installing: { version: '0.2.0', installing: true, progress: 0.42 },
+    failed: { version: '0.2.0', error: 'Update failed: signature verification failed' },
+    current: { upToDate: true },
+  }[params.get('update')] ?? {},
 };
 window.__TAURI__ = {
   core: { invoke: async (cmd, args) => { console.log('invoke', cmd, args); return cmd === 'get_snapshot' ? snapshot : undefined; } },

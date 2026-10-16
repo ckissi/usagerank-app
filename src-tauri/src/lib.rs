@@ -7,6 +7,7 @@ mod login_item;
 mod pricing;
 mod scan;
 mod tray_image;
+mod updater;
 
 use api::{Api, ApiError};
 use config::{AppFile, Config, Display, Env, Settings};
@@ -75,6 +76,7 @@ struct Inner {
     /// After a 429, don't ask that provider again before this.
     claude_backoff: Option<Instant>,
     codex_backoff: Option<Instant>,
+    update: updater::UpdateState,
 }
 
 struct Shared {
@@ -154,6 +156,7 @@ struct Snapshot {
     ui: serde_json::Map<String, Value>,
     errors: Vec<String>,
     version: &'static str,
+    update: updater::UpdateView,
 }
 
 fn snapshot(app: &AppHandle) -> Snapshot {
@@ -200,6 +203,7 @@ fn snapshot(app: &AppHandle) -> Snapshot {
             errors
         },
         version: env!("CARGO_PKG_VERSION"),
+        update: i.update.view.clone(),
     })
 }
 
@@ -694,6 +698,18 @@ fn set_settings(app: AppHandle, settings: Settings) -> Result<Snapshot, String> 
     Ok(snapshot(&app))
 }
 
+/// Preferences → Check for updates.
+#[tauri::command]
+fn check_update(app: AppHandle) {
+    tauri::async_runtime::spawn(updater::check(app, true));
+}
+
+/// Download and install the update found by the last check, then relaunch.
+#[tauri::command]
+fn install_update(app: AppHandle) {
+    tauri::async_runtime::spawn(updater::install(app));
+}
+
 #[tauri::command]
 fn set_autostart(app: AppHandle, enabled: bool) -> Result<Snapshot, String> {
     login_item::set_enabled(&app, enabled)?;
@@ -1049,7 +1065,8 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_popover(app)))
         .plugin(tauri_plugin_positioner::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(not(target_os = "macos"))]
     let builder = builder.plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None));
     builder
@@ -1069,6 +1086,8 @@ pub fn run() {
             forget,
             open_url,
             open_leaderboard,
+            check_update,
+            install_update,
             set_popover_height,
             hide_popover,
             quit,
@@ -1096,6 +1115,7 @@ pub fn run() {
                 tauri::async_runtime::spawn(fetch_limits(app.handle().clone(), false));
             }
             start_scheduler(app.handle().clone());
+            updater::start(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())

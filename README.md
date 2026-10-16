@@ -6,8 +6,15 @@ Menu bar app for your Claude Code and Codex token usage. It works entirely local
 pnpm install
 pnpm dev                     # run
 pnpm build                   # UsageRank.app + .dmg in src-tauri/target/release/bundle
-scripts/release-mac.sh       # signed + notarized universal .dmg (needs .env.signing, see .env.signing.example)
+scripts/release-mac.sh       # signed + notarized universal .dmg + in-app update bundle (needs .env.signing, see .env.signing.example)
+scripts/release-mac.sh --publish --notes "What changed"   # same, then creates the GitHub release v<version>
 ```
+
+## Updates
+
+Release builds check `latest.json` on the newest [GitHub release](https://github.com/ckissi/usagerank-app/releases) 30 s after launch and then every 6 h (`src-tauri/src/updater.rs`). When a newer version is available, a banner at the top of the popover offers **Update** (download, verify, replace the app, relaunch) or **Later**. Preferences → Updates has **Check now**, which also works in dev builds.
+
+To ship an update, bump `version` in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json`, then run `scripts/release-mac.sh --publish`. The update bundle is signed with the Tauri updater key (`TAURI_SIGNING_PRIVATE_KEY_PATH` / `_PASSWORD` in `.env.signing`); its public key is in `tauri.conf.json`. Keep a backup of the key and its password: without them, installed copies can't be updated.
 
 ## What it does
 
@@ -66,6 +73,7 @@ The Leaderboard tab reads `GET /api/cli/stats?tz=…`, signed like every CLI req
 - `src-tauri/src/api.rs`: signed requests, batching, login
 - `src-tauri/src/config.rs`: `~/.usagerank` files, ed25519 keys, settings
 - `src-tauri/src/lib.rs`: tray, popover window, sync scheduler, commands
+- `src-tauri/src/updater.rs`: update checks and install
 - `dist/`: the popover UI (plain HTML/CSS/JS)
 - `scripts/make-icons.mjs`: draws the tray and app icons (`pnpm icons`)
-- `scripts/preview.html`: the popover with sample data, for UI work in a browser (`python3 -m http.server`, then open `/scripts/preview.html?tab=local|share&mode=main|local-out|prefs|prefs-out|onboarding|login|error|stats-error`)
+- `scripts/preview.html`: the popover with sample data, for UI work in a browser (`python3 -m http.server`, then open `/scripts/preview.html?tab=local|share&mode=main|local-out|prefs|prefs-out|onboarding|login|error|stats-error&update=available|installing|failed|current`)

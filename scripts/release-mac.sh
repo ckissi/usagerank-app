@@ -174,14 +174,20 @@ git add "${version_files[@]}" src-tauri/Cargo.lock
 git commit -q -m "Release $version"
 committed=1
 git tag -a "v$version" -m "UsageRank $version"
-git push -q --atomic origin main "v$version"
-
 assets=("$out/$(basename "$dmg")" "$out/$update_name" "$out/latest.json")
-if ! gh release create "v$version" -R "$repo" --verify-tag --title "UsageRank $version" --notes "${notes:-UsageRank $version}" "${assets[@]}"; then
+release_cmd=$(printf 'gh release create v%s -R %s --verify-tag --title "UsageRank %s" --notes %q' "$version" "$repo" "$version" "${notes:-UsageRank $version}"; printf ' %q' "${assets[@]}")
+
+# From here on, rerunning the script refuses (the version and tag exist), so on failure print how to finish by hand.
+if ! git push -q --atomic origin main "v$version"; then
+  echo "error: the release commit and tag v$version exist only on this Mac; the push failed. Finish with:" >&2
+  echo "  git push --atomic origin main v$version" >&2
+  echo "  $release_cmd" >&2
+  exit 1
+fi
+
+if ! eval "$release_cmd"; then
   echo "error: the tag v$version is pushed but the GitHub release failed. Retry with:" >&2
-  printf '  gh release create v%s -R %s --verify-tag --title "UsageRank %s" --notes %q' "$version" "$repo" "$version" "${notes:-UsageRank $version}" >&2
-  printf ' %q' "${assets[@]}" >&2
-  echo >&2
+  echo "  $release_cmd" >&2
   exit 1
 fi
 echo "published: https://github.com/$repo/releases/tag/v$version"

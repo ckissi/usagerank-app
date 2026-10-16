@@ -41,5 +41,11 @@
       "minimumSystemVersion": "13.0"
     },
     "resources": ["THIRD_PARTY_NOTICES.txt"]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY3RDg0NkRFNzhBRTgzNDgKUldSSWc2NTQza2JZWjk4SU1qcUJKNVMvcVkvS3VpNTNTMVhkYThKTG80T0hqNDJQUWpXRTkyVDMK",
+      "endpoints": ["https://github.com/ckissi/usagerank-app/releases/latest/download/latest.json"]
+    }
   }
 }

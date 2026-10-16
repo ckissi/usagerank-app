@@ -46,6 +46,7 @@ const ui = {
   busy: null, // name of the action in flight
   message: null, // { text, error } shown in preferences / onboarding
   confirmForget: false,
+  laterUpdate: null, // version whose banner was dismissed until the next launch
   expanded: new Set(store.get('expanded', '').split(',').filter(Boolean)), // providers showing every limit
 };
 
@@ -460,6 +461,22 @@ function rankView(d, p) {
     ${rows ? `<ul class="neighbors">${rows}</ul>` : `<div class="empty">${d ? 'Burn some tokens and you’ll show up here.' : ''}</div>`}`;
 }
 
+// "Update available" at the top of every view, until Update or Later.
+function updateBanner() {
+  const u = snap?.update;
+  if (u?.installing) {
+    const progress = u.progress != null ? ` (${Math.round(u.progress * 100)}%)` : '';
+    return `<div class="banner" role="status"><span class="dot pulse"></span><p>Updating to ${esc(u.version)}${progress}. UsageRank restarts when it's done.</p></div>`;
+  }
+  if (!u?.version || ui.laterUpdate === u.version) return '';
+  const notes = u.notes ? ` data-tip="${esc(u.notes)}" data-tip-title="What's new in ${esc(u.version)}" data-tip-wrap` : '';
+  return `<div class="banner" role="status"><span class="dot ${u.error ? 'error' : ''}"></span>
+    <p${notes}>${u.error ? esc(u.error) : `UsageRank ${esc(u.version)} is available.`}</p>
+    <button type="button" data-act="update">${u.error ? 'Retry' : 'Update'}</button>
+    <button type="button" data-act="later-update">Later</button>
+  </div>`;
+}
+
 function bannerView(text, retry = true) {
   return `<div class="banner" role="alert"><span class="dot error"></span><p>${esc(text)}</p>${retry ? '<button type="button" data-act="sync">Retry</button>' : ''}</div>`;
 }
@@ -626,9 +643,30 @@ function prefsView() {
     </header>
     ${general}
     ${sharing}
+    ${updatesPane()}
     <div class="actions">
       <button type="button" class="action" data-act="quit"><span>Quit UsageRank</span>${keys('⌘', 'Q')}</button>
-      <div class="hint mono" style="margin: 2px 10px 4px">v${esc(snap.version)}</div>
+    </div>`;
+}
+
+function updatesPane() {
+  const u = snap.update ?? {};
+  const hint = u.installing ? 'Updating…'
+    : u.checking ? 'Checking…'
+      : u.version ? `${u.version} is available.`
+        : u.error ? u.error
+          : u.upToDate ? "You're up to date."
+            : 'Checks for updates automatically.';
+  const button = u.version
+    ? `<button type="button" class="btn" data-act="update" ${u.installing ? 'disabled' : ''}>${u.installing ? 'Updating…' : 'Update'}</button>`
+    : `<button type="button" class="btn ghost" data-act="check-update" ${u.checking ? 'disabled' : ''}>Check now</button>`;
+  return `
+    <div class="pane">
+      <div class="label"><span>Updates</span><span class="rule"></span></div>
+      <div class="row">
+        <div class="grow"><div class="mono">v${esc(snap.version)}</div><div class="hint" style="margin: 0">${esc(hint)}</div></div>
+        ${button}
+      </div>
     </div>`;
 }
 
@@ -677,7 +715,7 @@ function notices() {
   if (snap?.statsError && ui.view === 'prefs') errors.push(snap.statsError);
   const banners = [...new Set(errors)].map((error) => bannerView(error, false)).join('');
   const message = ui.message ? `<div class="banner" role="${ui.message.error ? 'alert' : 'status'}"><span class="dot ${ui.message.error ? 'error' : 'idle'}"></span><p>${esc(ui.message.text)}</p>${ui.message.error ? '<button type="button" data-act="retry">Reload</button>' : ''}</div>` : '';
-  return banners + message;
+  return updateBanner() + banners + message;
 }
 
 function render() {
@@ -758,6 +796,12 @@ const actions = {
   leaderboard: () => invoke('open_leaderboard'),
   profile: () => snap.stats?.user?.profile_url && invoke('open_url', { url: snap.stats.user.profile_url }),
   quit: () => invoke('quit'),
+  update: () => invoke('install_update'),
+  'check-update': () => invoke('check_update'),
+  'later-update': () => {
+    ui.laterUpdate = snap.update?.version ?? null;
+    render();
+  },
   login: () => run('login', () => invoke('start_login', {
     handle: document.getElementById('handle')?.value ?? '',
     keepLogs: !!document.getElementById('keep-logs')?.checked,

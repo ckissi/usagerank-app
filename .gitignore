@@ -1,0 +1,22 @@
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+.DS_Store
+
+# Secrets / signing
+.env
+.env.*
+!.env.signing.example
+*.p8
+*.p12
+*.pem
+*.key
+*.cer
+*.mobileprovision
+*.provisionprofile
+
+# Release artifacts
+*.dmg
+
+# Local tool settings
+.claude/settings.local.json

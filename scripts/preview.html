@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UsageRank preview</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap">
+<link rel="stylesheet" href="../dist/styles.css">
+<style>html,body{background:oklch(0.9 0.006 250)!important;overflow:auto!important}@media (prefers-color-scheme: dark){html,body{background:oklch(0.12 0.004 250)!important}}</style>
+</head>
+<body>
+<div class="shell" id="shell"><main class="card" id="card"></main></div>
+<script>
+const today = new Date();
+const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const from = new Date(today); from.setDate(today.getDate() - today.getDay() - 19 * 7);
+let seed = 11; const rand = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+const days = [];
+for (let d = new Date(from); d <= today; d.setDate(d.getDate() + 1)) {
+  const weekend = d.getDay() === 0 || d.getDay() === 6;
+  const r = rand();
+  if (weekend && r < 0.4) continue;
+  days.push({ date: iso(d), tokens: Math.round((weekend ? 4e6 : 15e6) + r * 40e6) });
+}
+const nb = (r, h, t, n, you = false) => ({ rank: r, name: h, handle: h, tool: t, tokens: n, you });
+const stats = {
+  user: { name: 'Mira', handle: 'mira.builds', profile_url: 'https://usagerank.com/u/mira.builds' },
+  leaderboard_url: 'https://usagerank.com', today: iso(today),
+  periods: {
+    1: { tokens: 41.2e6, cost: 128, claude: 29.7e6, codex: 11.5e6, rank: 14, previous_rank: 17, of: 2318, neighbors: [nb(13, 'opus_enjoyer', 'claude', 43e6), nb(14, 'mira.builds', 'claude', 41.2e6, true), nb(15, 'cachemiss', 'codex', 39.8e6)], models: [{ name: 'claude-opus-5-5', tool: 'claude', share: 41 }, { name: 'gpt-5-codex', tool: 'codex', share: 24 }, { name: 'claude-sonnet-5', tool: 'claude', share: 22 }, { name: 'claude-haiku-4-5', tool: 'claude', share: 13 }] },
+    7: { tokens: 268e6, cost: 812, claude: 182e6, codex: 86e6, rank: 9, previous_rank: 11, of: 2318, neighbors: [nb(8, 'nightshift_dev', 'claude', 281e6), nb(9, 'mira.builds', 'claude', 268e6, true), nb(10, 'yolo_mode', 'codex', 251e6)], models: [{ name: 'claude-opus-5-5', tool: 'claude', share: 50 }, { name: 'gpt-5-codex', tool: 'codex', share: 30 }] },
+    30: { tokens: 1.14e9, cost: 3406, claude: 0.8e9, codex: 0.34e9, rank: 11, previous_rank: 10, of: 2318, neighbors: [nb(10, 'shipitsteve', 'claude', 1.19e9), nb(11, 'mira.builds', 'claude', 1.14e9, true), nb(12, 'codexcarl', 'codex', 1.09e9)], models: [] },
+  },
+  activity: { from: iso(from), to: iso(today), days },
+};
+const params = new URLSearchParams(location.search);
+const mode = params.get('mode') || 'main';
+const tool = (t, tokens, cost, calls, sessions) => ({ tool: t, tokens, cost, calls, sessions });
+const lp = (tokens, cost, cc, calls, sessions, hours, models) => ({
+  tokens, cost, claude: tokens * cc, codex: tokens * (1 - cc), calls, sessions, active_hours: hours,
+  input: tokens * 0.0001, output: tokens * 0.003, cache_write: tokens * 0.05, cache_read: tokens * 0.9466,
+  tools: [tool('claude', tokens * cc, cost * 0.8, Math.round(calls * 0.7), Math.ceil(sessions * 0.6)), tool('codex', tokens * (1 - cc), cost * 0.2, Math.round(calls * 0.3), Math.floor(sessions * 0.4))],
+  models,
+});
+const local = {
+  today: iso(today), first_day: iso(from),
+  periods: {
+    1: lp(38.4e6, 117.2, 0.72, 412, 6, 9, stats.periods[1].models),
+    7: lp(251e6, 760, 0.68, 2804, 31, 52, stats.periods[7].models),
+    30: lp(1.02e9, 3110, 0.7, 11250, 120, 190, stats.periods[1].models),
+  },
+  activity: stats.activity,
+};
+const scaleView = (f) => ({
+  periods: Object.fromEntries(Object.entries(local.periods).map(([k, p]) => [k, { ...lp(p.tokens * f, p.cost * f, f === 1 ? 1 : 0, Math.round(p.calls * f), Math.max(1, Math.round(p.sessions * f)), Math.max(1, Math.round(p.active_hours * f)), p.models), tools: p.tools?.filter((t) => (f > 0.5) === (t.tool === 'claude')) }])),
+  activity: { ...stats.activity, days: stats.activity.days.map((d) => ({ ...d, tokens: Math.round(d.tokens * f * (0.5 + rand())) })) },
+});
+local.by_tool = { claude: scaleView(0.7), codex: scaleView(0.3) };
+const snapshot = {
+  signedIn: !['onboarding', 'login', 'local-out', 'prefs-out'].includes(mode), hasConfig: true,
+  local, scanning: false, statsError: mode === 'stats-error' ? "The leaderboard server doesn't serve stats to the app yet." : null, handle: 'mira.builds', suggestedHandle: 'mira.builds',
+  account: { name: 'Mira', email: 'mira@example.com' }, machineId: '0f8a2c1e-5b7d-4c3e-9a1f-2b6d8e4c7a90',
+  apiUrl: 'https://usagerank.com/api/cli/usage', webUrl: 'https://usagerank.com',
+  syncing: mode === 'syncing', lastSyncAt: Date.now() - 125000, lastError: mode === 'error' ? "POST https://usagerank.com/api/cli/usage failed: can't reach usagerank.com" : null,
+  stats: mode === 'stats-error' ? null : stats,
+  settings: { display: 'tokens', intervalMinutes: 30, claude: true, codex: true }, autostart: true, retentionDays: 30,
+  login: mode === 'login' ? { userCode: 'BCDF-GHJK', url: 'https://usagerank.com/cli/authorize?code=BCDF-GHJK', expiresAt: Date.now() + 540000 } : null,
+  loginError: null, sources: [{ key: 'claude', label: 'Claude Code', dirs: ['/Users/mira/.claude/projects'] }, { key: 'codex', label: 'Codex', dirs: ['/Users/mira/.codex/sessions'] }], version: '0.1.0',
+};
+window.__TAURI__ = {
+  core: { invoke: async (cmd, args) => { console.log('invoke', cmd, args); return cmd === 'get_snapshot' ? snapshot : undefined; } },
+  event: { listen: async () => () => {} },
+};
+window.ResizeObserver = class { observe() {} };
+</script>
+<script>if (params.get('tab')) { localStorage.setItem('tab', params.get('tab')); }</script>
+<script src="../dist/main.js"></script>
+<script>if (mode.startsWith('prefs')) setTimeout(() => document.querySelector('[data-act="prefs"]').click(), 100);</script>
+</body>
+</html>

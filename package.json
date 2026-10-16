@@ -1,0 +1,16 @@
+{
+  "name": "usagerank-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs && cargo test --manifest-path src-tauri/Cargo.toml --locked",
+    "icons": "node scripts/make-icons.mjs && tauri icon src-tauri/icons/app-source.png",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

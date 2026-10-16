@@ -20,3 +20,6 @@ src-tauri/gen/
 
 # Local tool settings
 .claude/settings.local.json
+
+# Release notes draft for scripts/release-mac.sh --notes "$(cat notes.md)"
+notes.md

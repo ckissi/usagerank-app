@@ -6,15 +6,15 @@ Menu bar app for your Claude Code and Codex token usage. It works entirely local
 pnpm install
 pnpm dev                     # run
 pnpm build                   # UsageRank.app + .dmg in src-tauri/target/release/bundle
-scripts/release-mac.sh       # signed + notarized universal .dmg + in-app update bundle (needs .env.signing, see .env.signing.example)
-scripts/release-mac.sh --publish --notes "What changed"   # same, then creates the GitHub release v<version>
+scripts/release-mac.sh       # test build: signed + notarized universal .dmg + update bundle, nothing published (needs .env.signing, see .env.signing.example)
+scripts/release-mac.sh 1.2.3 --notes "What changed"   # release: bump version, build, commit, tag v1.2.3, push, GitHub release
 ```
 
 ## Updates
 
 Release builds check `latest.json` on the newest [GitHub release](https://github.com/ckissi/usagerank-app/releases) 30 s after launch and then every 6 h (`src-tauri/src/updater.rs`). When a newer version is available, a banner at the top of the popover offers **Update** (download, verify, replace the app, relaunch) or **Later**. Preferences → Updates has **Check now**, which also works in dev builds.
 
-To ship an update, bump `version` in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json`, then run `scripts/release-mac.sh --publish`. The update bundle is signed with the Tauri updater key (`TAURI_SIGNING_PRIVATE_KEY_PATH` / `_PASSWORD` in `.env.signing`); its public key is in `tauri.conf.json`. Keep a backup of the key and its password: without them, installed copies can't be updated.
+To ship an update, run `scripts/release-mac.sh <new version> --notes "…"` on a clean, up-to-date `main`. It sets the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json` (and puts them back if the build fails), commits "Release <version>", pushes the commit and the `v<version>` tag, and creates the GitHub release that installed apps update from. The update bundle is signed with the Tauri updater key (`TAURI_SIGNING_PRIVATE_KEY_PATH` / `_PASSWORD` in `.env.signing`); its public key is in `tauri.conf.json`. Keep a backup of the key and its password: without them, installed copies can't be updated.
 
 ## What it does
 

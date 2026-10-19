@@ -17,10 +17,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::future::Future;
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::Duration;
 
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const CLAUDE_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const CLAUDE_REFRESH_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_SCOPES: &str = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
@@ -336,10 +339,17 @@ fn commit_refresh(
     Ok(())
 }
 
-fn claude_plan(login: &Login) -> Option<String> {
-    let kind = login.str("subscriptionType")?;
+/// Prefer the live profile: Claude Code saves `subscriptionType`/`rateLimitTier` at sign-in and never
+/// updates them on refresh, so after an upgrade the saved login still names the old plan.
+fn claude_plan(login: &Login, profile: Option<&Value>) -> Option<String> {
+    let org = profile.and_then(|p| p.get("organization"));
+    let live = |key| org.and_then(|o| o.get(key)).and_then(Value::as_str).filter(|s| !s.is_empty()).map(String::from);
+    let kind = live("organization_type").map(|k| k.strip_prefix("claude_").unwrap_or(&k).to_string())
+        .filter(|k| !k.is_empty())
+        .or_else(|| login.str("subscriptionType"))?;
+    let tier = live("rate_limit_tier").or_else(|| login.str("rateLimitTier"));
     let mut plan = title_case(&kind.replace('_', " "));
-    if let Some(tier) = login.str("rateLimitTier") {
+    if let Some(tier) = tier {
         if let Some(mult) = tier.split(|c: char| !c.is_ascii_alphanumeric()).find(|p| {
             p.len() > 1 && p.ends_with('x') && p[..p.len() - 1].chars().all(|c| c.is_ascii_digit())
         }) {
@@ -347,6 +357,33 @@ fn claude_plan(login: &Login) -> Option<String> {
         }
     }
     Some(plan)
+}
+
+/// The profile Anthropic returned for one access token (hashed), or `None` when that lookup failed.
+/// The usage endpoint rate-limits aggressively, so the profile is fetched at most once per token,
+/// failures included: a failed lookup keeps the stored plan until the token rotates.
+type ProfileCache = Mutex<Option<(String, Option<Value>)>>;
+static CLAUDE_PROFILE: ProfileCache = Mutex::new(None);
+
+async fn live_profile<F: Future<Output = Option<Value>>>(cache: &ProfileCache, token: &str, fetch: impl FnOnce() -> F) -> Option<Value> {
+    let key = sha256_hex(token.trim(), 16);
+    if let Some((cached, profile)) = cache.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if *cached == key {
+            return profile.clone();
+        }
+    }
+    let profile = fetch().await;
+    *cache.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, profile.clone()));
+    profile
+}
+
+/// Best effort: the plan falls back to the saved login when this fails.
+async fn claude_profile(http: &reqwest::Client, token: &str) -> Option<Value> {
+    let res = http.get(CLAUDE_PROFILE_URL)
+        .bearer_auth(token.trim()).header("Accept", "application/json")
+        .header("anthropic-beta", "oauth-2025-04-20").send().await.ok()?;
+    if !res.status().is_success() { return None; }
+    res.json().await.ok()
 }
 
 fn title_case(s: &str) -> String {
@@ -443,7 +480,7 @@ async fn fetch_claude_desktop(http: &reqwest::Client, desktop: crate::claude_des
     let login = Login { doc: desktop.doc, source: Source::Desktop };
     let token = login.str("accessToken").ok_or_else(|| FetchError::new(crate::claude_desktop::DesktopError::Invalid.message()))?;
     // Confirm the borrowed token matches Desktop's current organization and account before usage.
-    let profile = http.get("https://api.anthropic.com/api/oauth/profile")
+    let profile = http.get(CLAUDE_PROFILE_URL)
         .bearer_auth(token.trim()).header("Accept", "application/json")
         .header("anthropic-beta", "oauth-2025-04-20").send().await.map_err(|e| net_error("Anthropic", e))?;
     if matches!(profile.status().as_u16(), 401 | 403) {
@@ -455,7 +492,7 @@ async fn fetch_claude_desktop(http: &reqwest::Client, desktop: crate::claude_des
         return Err(FetchError::new("Claude Desktop login changed. Open Claude Desktop, then refresh limits."));
     }
     match claude_usage(http, &token).await? {
-        Ok(body) => Ok(Fetched { plan: claude_plan(&login), windows: claude_windows(&body) }),
+        Ok(body) => Ok(Fetched { plan: claude_plan(&login, Some(&profile)), windows: claude_windows(&body) }),
         Err((401 | 403, _)) => Err(FetchError::new(crate::claude_desktop::DesktopError::Stale.message())),
         Err((_, error)) => Err(error),
     }
@@ -514,7 +551,11 @@ async fn fetch_claude_code(env: &Env, http: &reqwest::Client) -> Result<Fetched,
         loop {
             let token = login.str("accessToken").unwrap_or_default();
             match claude_usage(http, &token).await? {
-                Ok(body) => return Ok(Fetched { plan: claude_plan(&login), windows: claude_windows(&body) }),
+                Ok(body) => {
+                    // Only once usage accepted the token, so a profile failure is never an auth signal.
+                    let profile = live_profile(&CLAUDE_PROFILE, &token, || claude_profile(http, &token)).await;
+                    return Ok(Fetched { plan: claude_plan(&login, profile.as_ref()), windows: claude_windows(&body) });
+                }
                 Err((401, _)) if !refreshed => {
                     match claude_refresh(http, &mut login).await {
                         Ok(()) => refreshed = true,
@@ -727,6 +768,30 @@ mod error_tests {
             .unwrap_or_else(|e| panic!("{}", e.message));
         assert!(!fetched.windows.is_empty(), "Expected subscription usage windows");
         eprintln!("Desktop fallback: account verified, {} usage windows fetched.", fetched.windows.len());
+    }
+
+    #[test]
+    fn claude_plan_prefers_live_profile() {
+        let login = Login { doc: json!({"claudeAiOauth":{"subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}), source: Source::Desktop };
+        assert_eq!(claude_plan(&login, None).as_deref(), Some("Max 5x"));
+        let profile = json!({"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}});
+        assert_eq!(claude_plan(&login, Some(&profile)).as_deref(), Some("Max 20x"));
+        assert_eq!(claude_plan(&login, Some(&json!({}))).as_deref(), Some("Max 5x"));
+    }
+
+    #[test]
+    fn live_profile_is_fetched_once_per_token() {
+        let cache: ProfileCache = Mutex::new(None);
+        let calls = std::cell::Cell::new(0);
+        let fetch = |result: Option<Value>| { calls.set(calls.get() + 1); async move { result } };
+        let profile = json!({"organization":{"rate_limit_tier":"default_claude_max_20x"}});
+        tauri::async_runtime::block_on(async {
+            assert_eq!(live_profile(&cache, "a", || fetch(None)).await, None);
+            assert_eq!(live_profile(&cache, "a", || fetch(Some(profile.clone()))).await, None);
+            assert_eq!(live_profile(&cache, "b", || fetch(Some(profile.clone()))).await, Some(profile.clone()));
+            assert_eq!(live_profile(&cache, "b", || fetch(None)).await, Some(profile.clone()));
+        });
+        assert_eq!(calls.get(), 2);
     }
 
     #[test]

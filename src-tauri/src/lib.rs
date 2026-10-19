@@ -14,7 +14,7 @@ use config::{AppFile, Config, Display, Env, Settings};
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
@@ -64,7 +64,9 @@ struct Inner {
     login_seq: u64,
     sources: Vec<scan::SourceInfo>,
     last_local_scan: Option<Instant>,
-    last_attempt: Option<Instant>,
+    /// Wall-clock, not `Instant`: on macOS `Instant` stops while the Mac sleeps, so a push would
+    /// wait a full awake interval after wake instead of going out as soon as it is overdue.
+    last_attempt: Option<SystemTime>,
     last_attempt_failed: bool,
     last_stats_fetch: Option<Instant>,
     /// Live subscription limits. Only fetched once the Limits tab asked for them, so nobody who
@@ -414,7 +416,7 @@ async fn sync(app: AppHandle, all: bool) {
 
     let settings = shared.with(|i| {
         i.syncing = true;
-        i.last_attempt = Some(Instant::now());
+        i.last_attempt = Some(SystemTime::now());
         i.app.settings.clone()
     });
     refresh(&app);
@@ -589,7 +591,7 @@ fn start_scheduler(app: AppHandle) {
                     Duration::from_secs(i.app.settings.interval_minutes.max(5) as u64 * 60)
                 };
                 (
-                    !i.syncing && i.login.is_none() && i.last_attempt.is_none_or(|t| t.elapsed() >= every),
+                    !i.syncing && i.login.is_none() && i.last_attempt.is_none_or(|t| t.elapsed().map_or(true, |e| e >= every)),
                     i.last_local_scan.is_none_or(|t| t.elapsed() >= LOCAL_EVERY),
                 )
             });

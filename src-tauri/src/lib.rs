@@ -18,9 +18,8 @@ use std::time::{Duration, Instant, SystemTime};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, LogicalSize, Manager, WindowEvent};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, Monitor, PhysicalPosition, WebviewWindow, WindowEvent};
 use tauri_plugin_opener::OpenerExt;
-use tauri_plugin_positioner::{on_tray_event, Position, WindowExt};
 
 const MAIN_WINDOW_LABEL: &str = "main";
 const TRAY_ID: &str = "usagerank";
@@ -605,13 +604,53 @@ fn start_scheduler(app: AppHandle) {
     });
 }
 
+/// Put the popover under the menu bar item, left edges aligned like a native menu, kept fully on the screen that holds it. The tray rect
+/// can point off every screen (e.g. right after a display is unplugged), so fall
+/// back to the cursor's screen, then the primary one, rather than trusting it blindly.
+fn place_popover(app: &AppHandle, window: &WebviewWindow) {
+    let tray_rect = app.tray_by_id(TRAY_ID).and_then(|tray| tray.rect().ok().flatten()).map(|rect| {
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let position = rect.position.to_physical::<f64>(scale);
+        let size = rect.size.to_physical::<f64>(scale);
+        (position.x, position.y + size.height)
+    });
+    // `monitor_from_point` misses points that are plainly on a screen on macOS, so match by hand.
+    let monitors = window.available_monitors().unwrap_or_default();
+    let on_screen = |x: f64, y: f64| {
+        monitors.iter().find(|m| {
+            let (p, s) = (m.position(), m.size());
+            (p.x as f64..p.x as f64 + s.width as f64).contains(&x) && (p.y as f64..p.y as f64 + s.height as f64).contains(&y)
+        }).cloned()
+    };
+    let cursor = app.cursor_position().ok();
+    let (anchor_x, anchor_y, monitor): (Option<f64>, Option<f64>, Monitor) =
+        match tray_rect.and_then(|(x, y)| on_screen(x + 1.0, y - 1.0).map(|m| (x, y, m))) {
+            Some((x, y, monitor)) => (Some(x), Some(y), monitor),
+            None => match cursor.and_then(|c| on_screen(c.x, c.y).map(|m| (c.x, m))) {
+                Some((x, monitor)) => (Some(x), None, monitor),
+                None => match window.primary_monitor().ok().flatten() {
+                    Some(monitor) => (None, None, monitor),
+                    None => return,
+                },
+            },
+        };
+
+    let area = monitor.work_area();
+    let (left, top) = (area.position.x as f64, area.position.y as f64);
+    let right = left + area.size.width as f64;
+    let width = window.outer_size().map(|s| s.width as f64).unwrap_or(POPOVER_WIDTH * monitor.scale_factor());
+    let x = anchor_x.unwrap_or(right - width).clamp(left, (right - width).max(left));
+    let y = anchor_y.map_or(top, |y| y.max(top));
+    let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+}
+
 fn show_popover(app: &AppHandle) {
     let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else { return };
     if window.is_visible().unwrap_or(false) {
         let _ = window.hide();
         return;
     }
-    let _ = window.move_window_constrained(Position::TrayCenter);
+    place_popover(app, &window);
     let _ = window.show();
     let _ = window.set_focus();
     let _ = app.emit("popover-shown", ());
@@ -1036,7 +1075,6 @@ fn build_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            on_tray_event(tray.app_handle(), &event);
             if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
                 show_popover(tray.app_handle());
             }
@@ -1066,7 +1104,6 @@ pub fn run() {
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_popover(app)))
-        .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(not(target_os = "macos"))]

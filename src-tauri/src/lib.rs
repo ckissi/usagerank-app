@@ -78,6 +78,9 @@ struct Inner {
     claude_backoff: Option<Instant>,
     codex_backoff: Option<Instant>,
     update: updater::UpdateState,
+    /// Where the open popover's top-left belongs. macOS can move the key window on its own (e.g. a
+    /// screen capture hotkey centred it), so a move to anywhere else is undone.
+    popover_at: Option<PhysicalPosition<i32>>,
 }
 
 struct Shared {
@@ -641,7 +644,9 @@ fn place_popover(app: &AppHandle, window: &WebviewWindow) {
     let width = window.outer_size().map(|s| s.width as f64).unwrap_or(POPOVER_WIDTH * monitor.scale_factor());
     let x = anchor_x.unwrap_or(right - width).clamp(left, (right - width).max(left));
     let y = anchor_y.map_or(top, |y| y.max(top));
-    let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+    let position = PhysicalPosition::new(x.round() as i32, y.round() as i32);
+    app.state::<SharedState>().with(|i| i.popover_at = Some(position));
+    let _ = window.set_position(position);
 }
 
 fn show_popover(app: &AppHandle) {
@@ -1028,7 +1033,8 @@ fn set_popover_height(app: AppHandle, height: f64) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         // macOS resizes around the bottom-left corner, so a shrink would push the top edge
         // down away from the menu bar. Pin the top edge back where it was.
-        let top_left = window.outer_position();
+        let placed = app.state::<SharedState>().with(|i| i.popover_at);
+        let top_left = placed.map(Ok).unwrap_or_else(|| window.outer_position());
         let _ = window.set_size(LogicalSize::new(POPOVER_WIDTH, height.clamp(200.0, 1000.0)));
         if let Ok(position) = top_left {
             let _ = window.set_position(position);
@@ -1143,8 +1149,17 @@ pub fn run() {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 let popover = window.clone();
                 window.on_window_event(move |event| {
-                    if let WindowEvent::Focused(false) = event {
-                        let _ = popover.hide();
+                    match event {
+                        WindowEvent::Focused(false) => {
+                            let _ = popover.hide();
+                        }
+                        WindowEvent::Moved(position) if popover.is_visible().unwrap_or(false) => {
+                            let placed = popover.state::<SharedState>().with(|i| i.popover_at);
+                            if let Some(placed) = placed.filter(|p| p != position) {
+                                let _ = popover.set_position(placed);
+                            }
+                        }
+                        _ => {}
                     }
                 });
             }

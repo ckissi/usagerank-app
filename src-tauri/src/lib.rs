@@ -1022,6 +1022,84 @@ fn open_url(app: AppHandle, url: String) -> Result<(), String> {
     open_external(&app, &url)
 }
 
+/// Puts the share card (a base64 PNG drawn by the popover) on the clipboard, ready to paste into a post.
+#[tauri::command]
+fn copy_image(png: String) -> Result<(), String> {
+    copy_png(&decode_png(&png)?)
+}
+
+/// Uploads the share card so a post can link to a page that previews it. Only for linked Macs.
+#[tauri::command]
+async fn upload_image(app: AppHandle, png: String) -> Result<String, String> {
+    decode_png(&png)?;
+    let shared = app.state::<SharedState>().inner().clone();
+    if shared.with(|i| i.sharing_disabled) {
+        return Err("Sharing is off.".into());
+    }
+    let cfg = signed_in_config(&shared.env)?.ok_or("Link this Mac to the leaderboard to share a card link.")?;
+    shared.api.share(&cfg, &png).await.map_err(|e| e.message)
+}
+
+/// Opens a social composer and reminds the person, after the popover has closed, that the card is
+/// on the clipboard.
+#[tauri::command]
+fn open_share(app: AppHandle, url: String, network: String, linked: bool) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    open_external(&app, &url)?;
+    let body = if linked {
+        format!("The link shows it as a preview. To attach it as an image instead, press ⌘V in the {network} post.")
+    } else {
+        format!("Press ⌘V in the {network} post to attach it.")
+    };
+    let _ = app.notification().builder().title("Usage card copied").body(body).show();
+    Ok(())
+}
+
+/// Saves the share card to ~/Downloads and shows it in Finder, for sites that want a file upload.
+#[tauri::command]
+fn save_image(app: AppHandle, png: String) -> Result<String, String> {
+    let bytes = decode_png(&png)?;
+    let dir = dirs::download_dir().ok_or("Cannot find the Downloads folder.")?;
+    let stamp = chrono::Local::now().format("%Y-%m-%d");
+    let mut path = dir.join(format!("UsageRank {stamp}.png"));
+    let mut n = 2;
+    while path.exists() {
+        path = dir.join(format!("UsageRank {stamp} {n}.png"));
+        n += 1;
+    }
+    std::fs::write(&path, bytes).map_err(|e| format!("Cannot save {}: {e}", path.display()))?;
+    let _ = app.opener().reveal_item_in_dir(&path);
+    Ok(path.display().to_string())
+}
+
+fn decode_png(data: &str) -> Result<Vec<u8>, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let bytes = STANDARD.decode(data).map_err(|_| "The image is not valid.".to_string())?;
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("The image is not a PNG.".into());
+    }
+    Ok(bytes)
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unused_unsafe)]
+fn copy_png(bytes: &[u8]) -> Result<(), String> {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypePNG};
+    use objc2_foundation::NSData;
+    let data = NSData::with_bytes(bytes);
+    let copied = unsafe {
+        let board = NSPasteboard::generalPasteboard();
+        board.clearContents();
+        board.setData_forType(Some(&data), NSPasteboardTypePNG)
+    };
+    if copied { Ok(()) } else { Err("Cannot copy the image to the clipboard.".into()) }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn copy_png(_bytes: &[u8]) -> Result<(), String> {
+    Err("Copying images is only supported on macOS. Save the image instead.".into())
+}
+
 #[tauri::command]
 fn open_leaderboard(app: AppHandle) -> Result<(), String> {
     let url = leaderboard_url(&app);
@@ -1111,6 +1189,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_popover(app)))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(not(target_os = "macos"))]
     let builder = builder.plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None));
@@ -1131,6 +1210,10 @@ pub fn run() {
             forget,
             open_url,
             open_leaderboard,
+            copy_image,
+            upload_image,
+            open_share,
+            save_image,
             check_update,
             install_update,
             set_popover_height,

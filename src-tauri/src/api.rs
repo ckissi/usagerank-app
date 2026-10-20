@@ -85,6 +85,14 @@ impl Api {
         }
     }
 
+    /// Shared cards are uploaded next to the usage endpoint too.
+    fn shares_url(&self) -> String {
+        match self.env.api_url.strip_suffix("/usage") {
+            Some(base) => format!("{base}/shares"),
+            None => format!("{}/api/cli/shares", self.env.web_url),
+        }
+    }
+
     async fn request(&self, cfg: &Config, method: Method, url: &str, payload: Option<&Value>, gzip: bool) -> ApiResult<Value> {
         let body: Vec<u8> = match payload {
             None => Vec::new(),
@@ -189,6 +197,12 @@ impl Api {
     /// Delete the user's row and history on the server.
     pub async fn forget(&self, cfg: &Config) -> ApiResult<Value> {
         self.request(cfg, Method::DELETE, &self.env.api_url, None, true).await
+    }
+
+    /// Host a usage card (base64 PNG) and return the link to post; its preview image is the card.
+    pub async fn share(&self, cfg: &Config, png: &str) -> ApiResult<String> {
+        let res = self.request(cfg, Method::POST, &self.shares_url(), Some(&json!({ "image": png })), false).await?;
+        res.get("url").and_then(Value::as_str).map(String::from).ok_or_else(|| err("The server did not return a share link."))
     }
 
     /// The signed-in user's standing, activity and model mix.

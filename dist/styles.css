@@ -249,6 +249,13 @@ select { height: 28px; border: 0; border-radius: 7px; padding: 0 8px; background
 .cell:not(.future):hover { box-shadow: 0 0 0 1px var(--fg); }
 .cell.today:hover { box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px var(--accent); }
 
+/* Share card */
+.sub-head .seg { margin-right: 4px; }
+.share-preview { display: grid; place-items: center; aspect-ratio: 1200 / 675; border-radius: 10px; overflow: hidden; background: var(--card); box-shadow: 0 0 0 1px var(--line); font-family: var(--mono); font-size: 11px; }
+.share-preview img { display: block; width: 100%; height: 100%; }
+.share-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+.share-grid .btn { padding: 0 6px; }
+
 /* Limits: live 5-hour / weekly windows */
 .provs { display: flex; flex-direction: column; gap: 14px; padding: 2px 12px 12px; }
 .prov-head { display: flex; align-items: center; gap: 7px; padding: 0 4px 7px; }

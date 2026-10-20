@@ -37,7 +37,7 @@ function applyPrefs(prefs) {
 }
 
 const ui = {
-  view: 'main', // main | prefs
+  view: 'main', // main | prefs | share
   tab: store.get('tab', 'local'), // local | limits | share
   period: store.get('period', '1'),
   tool: store.get('tool', '') || null, // null = all tools; 'claude' | 'codex' filters This Mac
@@ -47,6 +47,7 @@ const ui = {
   message: null, // { text, error } shown in preferences / onboarding
   confirmForget: false,
   laterUpdate: null, // version whose banner was dismissed until the next launch
+  share: null, // { image, theme } while the share view is open
   expanded: new Set(store.get('expanded', '').split(',').filter(Boolean)), // providers showing every limit
 };
 
@@ -98,7 +99,7 @@ function ago(ms) {
   if (!ms) return null;
   const s = Math.max(0, (Date.now() - ms) / 1000);
   if (s < 45) return 'just now';
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
   if (s < 86400) return `${Math.round(s / 3600)}h ago`;
   return `${Math.round(s / 86400)}d ago`;
 }
@@ -124,6 +125,7 @@ const ICON = {
   out: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>',
   chevronRight: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
   caret: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>',
+  share: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg>',
   chevron: '<svg class="chev" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
 };
 
@@ -192,7 +194,8 @@ function tilesView(d, p, { perHour, tokenNote } = {}) {
   </div>`;
 }
 
-function heatmapView(source) {
+// 20 weeks of daily totals as grid cells, shaded by quartile. Shared by the popover and the share card.
+function activityGrid(source) {
   const act = source?.activity;
   const today = source?.today ? parseDate(source.today) : new Date();
   const from = act?.from ? parseDate(act.from) : (() => {
@@ -225,24 +228,30 @@ function heatmapView(source) {
         prevMonth.setDate(day.getDate() - 7);
         const starts = col === 0 ? day.getDate() <= 7 : prevMonth.getMonth() !== day.getMonth();
         if (starts && col - lastLabelCol >= 3) {
-          months.push(`<span style="grid-column: ${col + 1}">${MONTHS[day.getMonth()]}</span>`);
+          months.push({ col, label: MONTHS[day.getMonth()] });
           lastLabelCol = col;
         }
       }
-      const cls = iso > todayIso ? 'future' : `l${level(tokens)}${iso === todayIso ? ' today' : ''}`;
-      const date = `${WEEKDAYS[day.getDay()]}, ${MONTHS[day.getMonth()]} ${day.getDate()}${iso === todayIso ? ' · today' : ''}`;
-      const value = iso > todayIso ? 'Upcoming' : tokens > 0 ? `${fmtTokens(tokens)} tokens` : 'No usage';
-      cells.push(`<i class="cell ${cls}" data-tip="${esc(value)}" data-tip-title="${esc(date)}"></i>`);
+      cells.push({ col, row, day, tokens, level: level(tokens), future: iso > todayIso, today: iso === todayIso });
     }
   }
+  return { from, cells, months, total };
+}
 
+function heatmapView(source) {
+  const { from, cells, months, total } = activityGrid(source);
   return `<section class="section" aria-label="Activity">
     <div class="label"><span>Activity</span><span class="rule"></span><span>20 wk</span></div>
     <div class="heat">
       <span></span>
-      <div class="heat-months">${months.join('')}</div>
+      <div class="heat-months">${months.map((m) => `<span style="grid-column: ${m.col + 1}">${m.label}</span>`).join('')}</div>
       <div class="heat-days"><span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span></div>
-      <div class="heat-grid">${cells.join('')}</div>
+      <div class="heat-grid">${cells.map((c) => {
+        const cls = c.future ? 'future' : `l${c.level}${c.today ? ' today' : ''}`;
+        const date = `${WEEKDAYS[c.day.getDay()]}, ${MONTHS[c.day.getMonth()]} ${c.day.getDate()}${c.today ? ' · today' : ''}`;
+        const value = c.future ? 'Upcoming' : c.tokens > 0 ? `${fmtTokens(c.tokens)} tokens` : 'No usage';
+        return `<i class="cell ${cls}" data-tip="${esc(value)}" data-tip-title="${esc(date)}"></i>`;
+      }).join('')}</div>
     </div>
     <div class="heat-foot">
       <span class="num">${fmtTokens(total)} tokens since ${MONTHS[from.getMonth()]}</span>
@@ -251,12 +260,17 @@ function heatmapView(source) {
   </section>`;
 }
 
-function modelsView(d, p) {
+// The top three models by spend, plus "other" for the rest.
+function modelShares(d) {
   const list = objectList(d?.models);
   const top = list.slice(0, 3);
   const used = top.reduce((s, m) => s + m.share, 0);
   if (list.length > 3 || (list.length && used < 100)) top.push({ name: 'other', share: Math.max(0, 100 - used) });
-  const shown = top.filter((m) => m.share > 0);
+  return top.filter((m) => m.share > 0);
+}
+
+function modelsView(d, p) {
+  const shown = modelShares(d);
   const swatch = (i) => `var(--h${4 - Math.min(i, 3)})`;
 
   return `<section class="section" aria-label="By model">
@@ -322,6 +336,7 @@ function localView() {
       ${snap.signedIn
         ? `<button type="button" class="action primary" data-act="leaderboard"><span>Open leaderboard</span>${ICON.out}</button>`
         : `<button type="button" class="action primary" data-tab="share"><span>Share on the leaderboard</span>${ICON.chevronRight}</button>`}
+      <button type="button" class="action" data-act="share" ${d ? '' : 'disabled'}><span>Share my usage</span>${ICON.share}</button>
       <button type="button" class="action" data-act="sync" ${snap.syncing || snap.scanning ? 'disabled' : ''}><span>${snap.syncing ? 'Syncing…' : snap.scanning ? 'Reading logs…' : snap.signedIn ? 'Refresh & sync' : 'Refresh'}</span>${keys('⌘', 'R')}</button>
       <button type="button" class="action" data-act="quit"><span>Quit UsageRank</span>${keys('⌘', 'Q')}</button>
     </div>`;
@@ -497,6 +512,7 @@ function sharedView() {
     ${d?.models ? modelsView(d, p) : ''}
     <div class="actions">
       <button type="button" class="action primary" data-act="leaderboard"><span>Open leaderboard</span>${ICON.out}</button>
+      <button type="button" class="action" data-act="share" ${d ? '' : 'disabled'}><span>Share my usage</span>${ICON.share}</button>
       <button type="button" class="action" data-act="sync" ${snap.syncing ? 'disabled' : ''}><span>${snap.syncing ? 'Syncing…' : 'Sync now'}</span>${keys('⌘', 'R')}</button>
       <button type="button" class="action" data-act="quit"><span>Quit UsageRank</span>${keys('⌘', 'Q')}</button>
     </div>`;
@@ -553,6 +569,242 @@ function onboardingView() {
 function expiresIn(at) {
   const s = Math.max(0, Math.round((at - Date.now()) / 1000));
   return `expires in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+// ── share card ─────────────────────────────────────────────────────────────
+
+// Composers that take prefilled text or a link. None of them accept an image, so a linked Mac uploads
+// the card and posts a link to the profile page with the card as its preview. The card also goes on the clipboard, for
+// pasting it in as an image (the only way when this Mac is not linked).
+const NETWORKS = [
+  { key: 'x', label: 'X', url: (text, link) => `https://x.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(link)}` },
+  { key: 'facebook', label: 'Facebook', url: (_text, link) => `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(link)}` },
+  { key: 'reddit', label: 'Reddit', url: (text, link) => `https://www.reddit.com/submit?url=${encodeURIComponent(link)}&title=${encodeURIComponent(text)}` },
+  { key: 'linkedin', label: 'LinkedIn', url: (_text, link) => `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(link)}` },
+  { key: 'bluesky', label: 'Bluesky', url: (text, link) => `https://bsky.app/intent/compose?text=${encodeURIComponent(`${text} ${link}`)}` },
+  { key: 'threads', label: 'Threads', url: (text, link) => `https://www.threads.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(link)}` },
+];
+
+const SHARE_THEMES = {
+  dark: { bg: '#0d0f11', fg: '#eef0f2', muted: '#9b9fa4', faint: '#62666b', line: '#25282b', accent: '#f2894d', h: ['#1d1f22', '#383b3f', '#64686c', '#a7abaf', '#eef0f2'] },
+  light: { bg: '#fbfcfd', fg: '#151719', muted: '#62666b', faint: '#9b9fa4', line: '#e3e5e7', accent: '#d9612a', h: ['#eceef0', '#cfd2d5', '#93979b', '#505457', '#1d1f21'] },
+};
+
+// What the card shows: the view the person is looking at (This Mac, maybe filtered to one tool, or the leaderboard).
+function shareData() {
+  const p = currentPeriod();
+  const profile = snap.stats?.user?.profile_url;
+  if (ui.tab === 'share' && snap.signedIn) {
+    const handle = snap.stats?.user?.handle ?? snap.handle;
+    return {
+      p, source: snap.stats, d: snap.stats?.periods?.[ui.period] ?? null, tool: null, ranked: true,
+      scope: handle ? `@${handle}` : 'Leaderboard', link: profile ?? snap.stats?.leaderboard_url ?? snap.webUrl,
+    };
+  }
+  const view = ui.tool && snap.local?.by_tool?.[ui.tool];
+  const source = view ? { ...view, today: snap.local.today } : snap.local;
+  return {
+    p, source, d: source?.periods?.[ui.period] ?? null, tool: view ? ui.tool : null, ranked: false,
+    scope: 'This Mac', link: (snap.signedIn && profile) || snap.webUrl,
+  };
+}
+
+function shareText({ p, d, tool, ranked }) {
+  const tools = tool ? [TOOL_NAMES[tool]] : [d?.claude > 0 && 'Claude Code', d?.codex > 0 && 'Codex'].filter(Boolean);
+  const when = { 1: 'today', 7: 'in the last 7 days', 30: 'in the last 30 days' }[p.key];
+  const used = `I used ${fmtTokens(d?.tokens)} tokens${tools.length ? ` of ${tools.join(' and ')}` : ''} ${when}, ${fmtCost(d?.cost)} at list price.`;
+  return ranked && d?.rank != null ? `${used} #${fmtInt(d.rank)} of ${fmtInt(d.of)} on the UsageRank leaderboard.` : `${used} Tracked with UsageRank.`;
+}
+
+async function drawShareCard(data, theme) {
+  const t = SHARE_THEMES[theme];
+  const { p, d, source, tool, ranked } = data;
+  const W = 1200, H = 675, pad = 64, scale = 2;
+  const SANS = 'Geist, -apple-system, system-ui, sans-serif';
+  const MONO = '"Geist Mono", ui-monospace, Menlo, monospace';
+  const SERIF = '"Instrument Serif", "New York", Georgia, serif';
+  await Promise.allSettled(['italic 400 60px "Instrument Serif"', '400 60px "Instrument Serif"', '600 90px Geist', '400 16px "Geist Mono"', '500 16px "Geist Mono"']
+    .map((font) => document.fonts.load(font)));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = W * scale;
+  canvas.height = H * scale;
+  const g = canvas.getContext('2d');
+  g.scale(scale, scale);
+  const text = (str, x, y, { font, color = t.fg, align = 'left', spacing = 0 }) => {
+    g.font = font;
+    g.fillStyle = color;
+    g.textAlign = align;
+    if ('letterSpacing' in g) g.letterSpacing = `${spacing}px`;
+    g.fillText(str, x, y);
+    return g.measureText(str).width;
+  };
+  const caps = (str, x, y, opts = {}) => text(String(str).toUpperCase(), x, y, { font: `400 14px ${MONO}`, color: t.muted, spacing: 1.4, ...opts });
+  const rect = (x, y, w, h, r, color) => {
+    g.fillStyle = color;
+    g.beginPath();
+    if (g.roundRect) g.roundRect(x, y, w, h, r);
+    else g.rect(x, y, w, h);
+    g.fill();
+  };
+  const hline = (y) => rect(pad, y, W - pad * 2, 1, 0, t.line);
+
+  rect(0, 0, W, H, 0, t.bg);
+
+  // Header: wordmark left, whose usage and which period right.
+  const mark = text('UsageRank', pad, 112, { font: `italic 400 60px ${SERIF}`, spacing: -2 });
+  text('.', pad + mark, 112, { font: `400 60px ${SERIF}`, color: t.accent });
+  text(data.scope, W - pad, 84, { font: `500 18px ${MONO}`, align: 'right' });
+  caps({ 1: 'Today', 7: 'Last 7 days', 30: 'Last 30 days' }[p.key], W - pad, 112, { align: 'right' });
+  hline(148);
+
+  // Three stat columns.
+  const tokens = d?.tokens ?? 0;
+  const cc = tokens > 0 ? Math.round(((d.claude ?? 0) / tokens) * 100) : null;
+  const hours = d?.active_hours ?? 0;
+  let third;
+  if (ranked) {
+    const prev = d?.previous_rank;
+    const delta = d?.rank == null || prev == null ? '' : prev > d.rank ? ` · ▲ ${prev - d.rank}` : prev < d.rank ? ` · ▼ ${d.rank - prev}` : '';
+    third = ['Rank', d?.rank != null ? `#${fmtInt(d.rank)}` : '#—', d?.of ? `of ${fmtInt(d.of)}${delta}` : 'not ranked yet'];
+  } else {
+    third = ['Sessions', fmtInt(d?.sessions), `${fmtInt(d?.calls)} calls`];
+  }
+  const stats = [
+    [`Tokens`, fmtTokens(tokens), tool ? `${TOOL_NAMES[tool]} only` : cc === null ? 'CC — · CX —' : `CC ${cc}% · CX ${100 - cc}%`],
+    ['Spent', fmtCost(d?.cost), !ranked && hours > 0 ? `≈ ${fmtCost(d.cost / hours)}/hr active` : 'at list price'],
+    third,
+  ];
+  const colW = (W - pad * 2) / 3;
+  stats.forEach(([label, value, sub], i) => {
+    const x = pad + i * colW + (i ? 32 : 0);
+    if (i) rect(pad + i * colW, 172, 1, 160, 0, t.line);
+    caps(label, x, 200);
+    let size = 90;
+    g.font = `600 ${size}px ${SANS}`;
+    while (size > 40 && g.measureText(value).width > colW - 48) g.font = `600 ${(size -= 4)}px ${SANS}`;
+    text(value, x, 292, { font: `600 ${size}px ${SANS}`, spacing: -size * 0.035 });
+    text(sub, x, 328, { font: `400 16px ${MONO}`, color: t.muted });
+  });
+  hline(358);
+
+  // Activity heatmap, left.
+  const grid = activityGrid(source);
+  const cell = 20, gap = 5, gx = pad, gy = 432;
+  caps('Activity · 20 wk', gx, 398);
+  for (const m of grid.months) text(m.label, gx + m.col * (cell + gap), 422, { font: `400 12px ${MONO}`, color: t.faint });
+  for (const c of grid.cells) {
+    const x = gx + c.col * (cell + gap);
+    const y = gy + c.row * (cell + gap);
+    if (c.future) {
+      g.strokeStyle = t.line;
+      g.lineWidth = 1;
+      g.beginPath();
+      if (g.roundRect) g.roundRect(x + 0.5, y + 0.5, cell - 1, cell - 1, 4);
+      else g.rect(x + 0.5, y + 0.5, cell - 1, cell - 1);
+      g.stroke();
+      continue;
+    }
+    if (c.today) {
+      rect(x - 3, y - 3, cell + 6, cell + 6, 6, t.accent);
+      rect(x - 1.5, y - 1.5, cell + 3, cell + 3, 5, t.bg);
+    }
+    rect(x, y, cell, cell, 4, t.h[c.level]);
+  }
+
+  // Spend by model, right.
+  const mx = pad + 20 * (cell + gap) + 56;
+  const mw = W - pad - mx;
+  caps(`By model · ${p.word}`, mx, 398);
+  const models = modelShares(d);
+  const swatch = (i) => t.h[4 - Math.min(i, 3)];
+  rect(mx, 428, mw, 10, 5, t.h[0]);
+  let bx = mx;
+  models.forEach((m, i) => {
+    const w = (mw * m.share) / 100;
+    rect(bx, 428, Math.max(0, w - (i < models.length - 1 ? 3 : 0)), 10, 5, swatch(i));
+    bx += w;
+  });
+  if (!models.length) text('No spend in this period yet.', mx, 478, { font: `400 16px ${MONO}`, color: t.muted });
+  models.slice(0, 4).forEach((m, i) => {
+    const y = 482 + i * 34;
+    rect(mx, y - 12, 12, 12, 3, swatch(i));
+    let name = m.name;
+    g.font = `400 17px ${MONO}`;
+    while (name.length > 4 && g.measureText(name).width > mw - 90) name = name.slice(0, -2);
+    text(name === m.name ? name : `${name}…`, mx + 24, y, { font: `400 17px ${MONO}` });
+    text(`${m.share}%`, W - pad, y, { font: `400 17px ${MONO}`, color: t.muted, align: 'right' });
+  });
+
+  // Footer.
+  text(`${fmtTokens(grid.total)} tokens since ${MONTHS[grid.from.getMonth()]}`, mx, 622, { font: `400 15px ${MONO}`, color: t.muted });
+  text(String(data.link ?? '').replace(/^https?:\/\//, ''), W - pad, 622, { font: `500 15px ${MONO}`, color: t.fg, align: 'right' });
+
+  return canvas.toDataURL('image/png');
+}
+
+async function drawShare() {
+  const share = ui.share;
+  if (!share) return;
+  share.image = null;
+  share.link = null;
+  render();
+  const image = await drawShareCard(shareData(), share.theme);
+  // Ignore a card drawn for a view the person has already left or re-themed.
+  if (ui.share === share) {
+    share.image = image;
+    render();
+  }
+}
+
+const sharePng = () => ui.share?.image?.split(',')[1] ?? '';
+
+function shareView() {
+  const share = ui.share;
+  const ready = !!share?.image;
+  return `<header class="sub-head">
+      <button type="button" class="icon-btn" data-act="back" aria-label="Back">${ICON.chevron}</button>
+      <h1>Share my usage</h1>
+      <div class="seg" role="group" aria-label="Card theme">
+        ${['dark', 'light'].map((v) => `<button type="button" data-share-theme="${v}" aria-pressed="${share?.theme === v}">${v === 'dark' ? 'Dark' : 'Light'}</button>`).join('')}
+      </div>
+    </header>
+    <div class="pane">
+      <div class="share-preview">${ready ? `<img src="${share.image}" alt="Your usage card">` : '<span class="skeleton">Drawing your card…</span>'}</div>
+      <div class="label" style="margin-top: 14px"><span>Post to</span><span class="rule"></span></div>
+      <div class="share-grid">${NETWORKS.map((n) => `<button type="button" class="btn ghost" data-share="${n.key}" ${ready && !share.busy ? '' : 'disabled'}>${share.busy === n.key ? 'Uploading…' : n.label}</button>`).join('')}</div>
+      <p class="hint">${snap.signedIn
+        ? 'The post links to your profile page with this card as its preview. The card is on your clipboard too, to attach it as an image with ⌘V.'
+        : 'The card is copied to your clipboard and the post opens in your browser. Paste the card into it with ⌘V.'}</p>
+    </div>
+    <div class="actions">
+      <button type="button" class="action" data-act="copy-share" ${ready ? '' : 'disabled'}><span>Copy image</span>${keys('⌘', 'C')}</button>
+      <button type="button" class="action" data-act="save-share" ${ready ? '' : 'disabled'}><span>Save to Downloads</span></button>
+    </div>`;
+}
+
+async function shareTo(key) {
+  const share = ui.share;
+  const network = NETWORKS.find((n) => n.key === key);
+  if (!network || !share?.image || share.busy) return;
+  const data = shareData();
+  await invoke('copy_image', { png: sharePng() });
+  if (snap.signedIn && !share.link) {
+    share.busy = key;
+    render();
+    try {
+      share.link = await invoke('upload_image', { png: sharePng() });
+    } catch (error) {
+      // Still share, with the profile link; the card stays on the clipboard to paste.
+      ui.message = { text: `The post won't show your card as its preview: ${error}`, error: false };
+    } finally {
+      share.busy = null;
+      render();
+    }
+  }
+  // The profile page previews the newest uploaded card, so link to it whenever there is one.
+  const link = share.link ? (snap.stats?.user?.profile_url ?? share.link) : data.link;
+  await invoke('open_share', { url: network.url(shareText(data), link), network: network.label, linked: !!share.link });
 }
 
 // ── preferences ────────────────────────────────────────────────────────────
@@ -729,7 +981,9 @@ function render() {
     const caret = document.activeElement?.selectionStart;
     const content = ui.view === 'prefs'
       ? prefsView()
-      : ui.tab === 'local'
+      : ui.view === 'share'
+        ? shareView()
+        : ui.tab === 'local'
         ? localView()
         : ui.tab === 'limits'
           ? limitsView()
@@ -775,12 +1029,36 @@ const actions = {
   retry: () => loadSnapshot(),
   prefs: () => {
     ui.view = ui.view === 'prefs' ? 'main' : 'prefs';
+    ui.share = null;
     ui.handleDraft = null;
     ui.message = null;
     ui.confirmForget = false;
     render();
   },
-  back: () => actions.prefs(),
+  back: () => {
+    if (ui.view !== 'share') return actions.prefs();
+    ui.view = 'main';
+    ui.share = null;
+    ui.message = null;
+    render();
+  },
+  share: () => {
+    const dark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+    ui.view = 'share';
+    ui.message = null;
+    ui.share = { image: null, theme: ui.share?.theme ?? (dark ? 'dark' : 'light') };
+    return drawShare();
+  },
+  'copy-share': async () => {
+    if (!ui.share?.image) return;
+    await invoke('copy_image', { png: sharePng() });
+    flash('Card copied. Paste it into your post with ⌘V.');
+  },
+  'save-share': async () => {
+    if (!ui.share?.image) return;
+    const path = await invoke('save_image', { png: sharePng() });
+    flash(`Saved to ${String(path).replace(/^\/Users\/[^/]+/, '~')}`);
+  },
   'go-share': () => {
     ui.view = 'main';
     ui.tab = 'share';
@@ -863,6 +1141,17 @@ card.addEventListener('click', (e) => handle(async () => {
     ui.period = t.dataset.period;
     store.set('period', ui.period);
     render();
+  } else if (t.dataset.shareTheme) {
+    if (ui.share && ui.share.theme !== t.dataset.shareTheme) {
+      ui.share.theme = t.dataset.shareTheme;
+      await drawShare();
+    }
+  } else if (t.dataset.share) {
+    try {
+      await shareTo(t.dataset.share);
+    } catch (err) {
+      flash(String(err), true);
+    }
   } else if (t.dataset.display) {
     await saveSettings({ display: t.dataset.display });
   } else if (t.id === 'autostart') {
@@ -908,8 +1197,11 @@ window.addEventListener('keydown', (e) => {
   } else if (e.metaKey && e.key === ',') {
     e.preventDefault();
     if (snap) actions.prefs();
+  } else if (e.metaKey && e.key.toLowerCase() === 'c' && ui.view === 'share') {
+    e.preventDefault();
+    void handle(() => actions['copy-share']());
   } else if (e.key === 'Escape') {
-    if (ui.view === 'prefs') actions.back();
+    if (ui.view !== 'main') actions.back();
     else void handle(() => invoke('hide_popover'));
   }
 });
@@ -943,7 +1235,7 @@ window.addEventListener('unhandledrejection', (event) => {
   reportError(event.reason);
 });
 
-// Keep "Synced 2m ago", the login countdown and the limit countdowns fresh while the popover is open.
+// Keep "Synced 2 min ago", the login countdown and the limit countdowns fresh while the popover is open.
 let ticks = 0;
 setInterval(() => {
   if (!snap) return;

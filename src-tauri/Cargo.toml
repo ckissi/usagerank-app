@@ -1,6 +1,6 @@
 [package]
 name = "usagerank"
-version = "0.1.5"
+version = "0.1.6"
 description = "UsageRank menu bar app: pushes Claude Code and Codex token usage to the leaderboard"
 authors = ["Csaba Kissi"]
 edition = "2021"

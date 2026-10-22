@@ -4,6 +4,8 @@ mod config;
 mod limits;
 mod local;
 mod login_item;
+#[cfg(target_os = "macos")]
+mod popover;
 mod pricing;
 mod scan;
 mod tray_image;
@@ -611,6 +613,10 @@ fn start_scheduler(app: AppHandle) {
 /// can point off every screen (e.g. right after a display is unplugged), so fall
 /// back to the cursor's screen, then the primary one, rather than trusting it blindly.
 fn place_popover(app: &AppHandle, window: &WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    if popover::place(app, window, None) {
+        return;
+    }
     let tray_rect = app.tray_by_id(TRAY_ID).and_then(|tray| tray.rect().ok().flatten()).map(|rect| {
         let scale = window.scale_factor().unwrap_or(1.0);
         let position = rect.position.to_physical::<f64>(scale);
@@ -1109,6 +1115,10 @@ fn open_leaderboard(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn set_popover_height(app: AppHandle, height: f64) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        #[cfg(target_os = "macos")]
+        if popover::place(&app, &window, Some(height.clamp(200.0, 1000.0))) {
+            return;
+        }
         // macOS resizes around the bottom-left corner, so a shrink would push the top edge
         // down away from the menu bar. Pin the top edge back where it was.
         let placed = app.state::<SharedState>().with(|i| i.popover_at);
@@ -1237,6 +1247,10 @@ pub fn run() {
                             let _ = popover.hide();
                         }
                         WindowEvent::Moved(position) if popover.is_visible().unwrap_or(false) => {
+                            #[cfg(target_os = "macos")]
+                            if popover::place(popover.app_handle(), &popover, None) {
+                                return;
+                            }
                             let placed = popover.state::<SharedState>().with(|i| i.popover_at);
                             if let Some(placed) = placed.filter(|p| p != position) {
                                 let _ = popover.set_position(placed);

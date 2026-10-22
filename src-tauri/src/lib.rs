@@ -281,7 +281,8 @@ fn limit_segments(snap: &Snapshot) -> Vec<tray_image::Segment> {
         if a.is_none() {
             return None;
         }
-        let pct = |w: Option<&limits::Window>| w.map(|w| (100.0 - w.used).round().clamp(0.0, 100.0) as u32);
+        let shown = |used: f64| if snap.settings.show_used { used } else { 100.0 - used };
+        let pct = |w: Option<&limits::Window>| w.map(|w| shown(w.used).round().clamp(0.0, 100.0) as u32);
         Some(tray_image::Segment { glyph, lines: [pct(a), pct(b)] })
     };
     let mut out = Vec::new();
@@ -312,7 +313,9 @@ fn update_tray(app: &AppHandle, snap: &Snapshot) {
         Some(t) if snap.settings.display == Display::Cost => format!("UsageRank — {t} spent today"),
         Some(t) if snap.settings.display == Display::Rank && snap.signed_in => format!("UsageRank — rank {t} today"),
         Some(t) => format!("UsageRank — {t} tokens today"),
-        None if snap.settings.display == Display::Limits => "UsageRank — Claude / Codex remaining: session, weekly".to_string(),
+        None if snap.settings.display == Display::Limits => {
+            format!("UsageRank — Claude / Codex {}: session, weekly", if snap.settings.show_used { "used" } else { "remaining" })
+        }
         None => "UsageRank".to_string(),
     };
     let _ = tray.set_tooltip(Some(tooltip));

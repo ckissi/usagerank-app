@@ -385,16 +385,20 @@ function meterState(w, now = Date.now()) {
 
 function limitRow(w, stale) {
   const left = Math.max(0, Math.min(100, 100 - w.used));
+  // Used mode reads like Claude's own usage page: the bar fills up as the limit is spent.
+  const showUsed = !!snap.settings.showUsed;
+  const shown = showUsed ? 100 - left : left;
   const st = meterState(w);
+  const tick = st.tick == null ? null : showUsed ? 100 - st.tick : st.tick;
   const notStarted = !w.resetsAt && w.label === 'Session';
   const reset = notStarted ? 'Not started' : w.resetsAt ? (w.resetsAt > Date.now() ? `Resets in ${fmtDuration(w.resetsAt - Date.now())}` : 'Resetting…') : '';
   return `<div class="lim${stale ? ' stale' : ''}">
     <div class="lim-top"><span class="lim-label">${esc(w.label)}</span>${st.note ? `<span class="lim-note ${st.tone}">${esc(st.note)}</span>` : ''}</div>
     <div class="meter ${st.tone}"${st.tip ? ` data-tip="${esc(st.tip)}"` : ''}>
-      <span class="fill" style="width: ${left}%"></span>
-      ${st.tick != null ? `<i class="tick" style="left: ${st.tick}%"></i>` : ''}
+      <span class="fill" style="width: ${shown}%"></span>
+      ${tick != null ? `<i class="tick" style="left: ${tick}%"></i>` : ''}
     </div>
-    <div class="lim-foot"><span class="num">${Math.round(left)}% left</span><span class="muted"${notStarted ? ' data-tip="Starts with your first message"' : ''}>${reset}</span></div>
+    <div class="lim-foot"><span class="num">${Math.round(shown)}% ${showUsed ? 'used' : 'left'}</span><span class="muted"${notStarted ? ' data-tip="Starts with your first message"' : ''}>${reset}</span></div>
   </div>`;
 }
 
@@ -834,6 +838,13 @@ function prefsView() {
           ${displays.map(([v, l]) => `<button type="button" data-display="${v}" aria-pressed="${s.display === v}">${l}</button>`).join('')}
         </div>
       </div>
+      <div class="row">
+        <span>Limits as</span>
+        <div class="seg" role="group" aria-label="Show limits as">
+          <button type="button" data-show-used="false" aria-pressed="${!s.showUsed}">Left</button>
+          <button type="button" data-show-used="true" aria-pressed="${!!s.showUsed}">Used</button>
+        </div>
+      </div>
       <div class="row"><span>Launch at login</span>${toggle('autostart', snap.autostart, 'Launch at login')}</div>
     </div>
 
@@ -1154,6 +1165,8 @@ card.addEventListener('click', (e) => handle(async () => {
     }
   } else if (t.dataset.display) {
     await saveSettings({ display: t.dataset.display });
+  } else if (t.dataset.showUsed) {
+    await saveSettings({ showUsed: t.dataset.showUsed === 'true' });
   } else if (t.id === 'autostart') {
     await run('autostart', () => invoke('set_autostart', { enabled: !snap.autostart }));
   } else if (t.id === 'src-claude') {

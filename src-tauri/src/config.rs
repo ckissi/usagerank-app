@@ -272,11 +272,13 @@ pub struct Settings {
     pub interval_minutes: u32,
     pub claude: bool,
     pub codex: bool,
+    /// Show limits as percent used (like Claude's own usage page) instead of percent left.
+    pub show_used: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { display: Display::Tokens, interval_minutes: 30, claude: true, codex: true }
+        Settings { display: Display::Tokens, interval_minutes: 30, claude: true, codex: true, show_used: false }
     }
 }
 

@@ -56,6 +56,14 @@ const scaleView = (f) => ({
 });
 local.by_tool = { claude: scaleView(0.7), codex: scaleView(0.3) };
 const snapshot = {
+  limits: {
+    claude: { plan: 'Max 5x', fetchedAt: Date.now(), resets: { available: 2, expiresAt: [Date.now() + 5.5 * 3600e3, Date.now() + 9 * 86400e3] }, windows: [
+      { label: 'Session', used: 2, resetsAt: Date.now() + 3.7 * 3600e3, periodMs: 5 * 3600e3, primary: true },
+      { label: 'Weekly', used: 35, resetsAt: Date.now() + 31 * 3600e3, periodMs: 7 * 86400e3, primary: true }] },
+    codex: { plan: 'Plus', fetchedAt: Date.now(), resets: { available: 0, expiresAt: [] }, windows: [
+      { label: 'Session', used: 0, resetsAt: Date.now() + 5 * 3600e3, periodMs: 5 * 3600e3, primary: true },
+      { label: 'Weekly', used: 0, resetsAt: Date.now() + 7 * 86400e3, periodMs: 7 * 86400e3, primary: true }] },
+  },
   signedIn: !['onboarding', 'login', 'local-out', 'prefs-out'].includes(mode), hasConfig: true,
   local, scanning: false, statsError: mode === 'stats-error' ? "The leaderboard server doesn't serve stats to the app yet." : null, handle: 'mira.builds', suggestedHandle: 'mira.builds',
   account: { name: 'Mira', email: 'mira@example.com' }, machineId: '0f8a2c1e-5b7d-4c3e-9a1f-2b6d8e4c7a90',

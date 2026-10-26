@@ -514,6 +514,7 @@ fn merge_limits(
             limits::Provider {
                 plan: f.plan,
                 windows: f.windows,
+                resets: f.resets,
                 error: None,
                 missing: false,
                 fetched_at: Some(chrono::Utc::now().timestamp_millis()),

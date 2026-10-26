@@ -274,11 +274,13 @@ pub struct Settings {
     pub codex: bool,
     /// Show limits as percent used (like Claude's own usage page) instead of percent left.
     pub show_used: bool,
+    /// Show the Limit resets row (Claude reset grants, Codex reset credits) on the Limits tab.
+    pub show_resets: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { display: Display::Tokens, interval_minutes: 30, claude: true, codex: true, show_used: false }
+        Settings { display: Display::Tokens, interval_minutes: 30, claude: true, codex: true, show_used: false, show_resets: true }
     }
 }
 

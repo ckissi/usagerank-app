@@ -402,6 +402,26 @@ function limitRow(w, stale) {
   </div>`;
 }
 
+const DAY_MS = 24 * 3600 * 1000;
+
+// One-off resets the account can spend (Claude reset grants, Codex reset credits), as OpenUsage reads
+// them. Deadlines that passed since the last check are taken off here, between fetches. A reset that
+// lapses within a day gets a warning mark, so it's spent rather than lost.
+function resetsRow(r) {
+  const now = Date.now();
+  const expires = (Array.isArray(r.expiresAt) ? r.expiresAt : []).filter((t) => t > now);
+  const available = Math.max(0, (r.available ?? 0) - ((r.expiresAt?.length ?? 0) - expires.length));
+  const tip = expires.length > 1 ? ` data-tip="${esc(expires.map((t) => fmtDuration(t - now)).join(', '))}" data-tip-title="Each reset expires in"` : '';
+  const soon = expires.filter((t) => t - now < DAY_MS).length;
+  const warn = available && soon
+    ? `<span class="lim-warn" tabindex="0" aria-label="${soon === 1 ? 'A reset expires' : `${soon} resets expire`} within 24 hours" data-tip-title="${soon === 1 ? 'A reset expires' : `${soon} resets expire`} in ${fmtDuration(expires[0] - now)}" data-tip="Use it before then or it's lost">!</span>`
+    : '';
+  return `<div class="lim lim-resets">
+    <div class="lim-top"><span class="lim-label">Limit resets</span><span class="lim-count">${warn}<span class="num${available ? '' : ' muted'}">${available ? `${available} available` : 'None available'}</span></span></div>
+    ${available && expires.length ? `<div class="lim-foot"><span class="muted">Refills your limits once</span><span class="muted"${tip}>${expires.length > 1 ? 'Next expires' : 'Expires'} in ${fmtDuration(expires[0] - now)}</span></div>` : ''}
+  </div>`;
+}
+
 const LIMIT_PROVIDERS = [
   { key: 'claude', name: 'Claude', badge: 'CC', login: 'claude' },
   { key: 'codex', name: 'Codex', badge: 'CX', login: 'codex' },
@@ -427,6 +447,7 @@ function providerView(def) {
     const extra = windows.filter((w) => !w.primary);
     const shown = open ? windows : main;
     body = `${shown.length ? shown.map((w) => limitRow(w, false)).join('') : '<div class="lim-empty">No limits reported for this plan.</div>'}
+      ${p.resets && snap.settings.showResets !== false ? resetsRow(p.resets) : ''}
       ${extra.length ? `<button type="button" class="lim-more" data-expand="${def.key}" aria-expanded="${open}" aria-label="${open ? 'Show fewer limits' : `Show ${extra.length} more`}">${ICON.caret}</button>` : ''}`;
   }
   return `<section class="prov" aria-label="${def.name} limits">
@@ -845,6 +866,7 @@ function prefsView() {
           <button type="button" data-show-used="true" aria-pressed="${!!s.showUsed}">Used</button>
         </div>
       </div>
+      <div class="row"><span>Limit resets</span>${toggle('show-resets', s.showResets !== false, 'Show limit resets')}</div>
       <div class="row"><span>Launch at login</span>${toggle('autostart', snap.autostart, 'Launch at login')}</div>
     </div>
 
@@ -1167,6 +1189,8 @@ card.addEventListener('click', (e) => handle(async () => {
     await saveSettings({ display: t.dataset.display });
   } else if (t.dataset.showUsed) {
     await saveSettings({ showUsed: t.dataset.showUsed === 'true' });
+  } else if (t.id === 'show-resets') {
+    await saveSettings({ showResets: snap.settings.showResets === false });
   } else if (t.id === 'autostart') {
     await run('autostart', () => invoke('set_autostart', { enabled: !snap.autostart }));
   } else if (t.id === 'src-claude') {
